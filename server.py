@@ -1,6 +1,5 @@
 import socket
-import threading
-import stat
+from threading import Thread
 import mimetypes
 import urllib.parse
 import http.cookies
@@ -8,36 +7,38 @@ import argparse
 import os
 import mimetypes
 class HTTPServer:
-
+    
     def run_server(self, host, port):
-       print(f"Server Started at http://{host}:{port}")
-       self.host = host
-       self.port = port
-    
-    def setup_socket(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.bind((self.host, self.port))
-        self.socket.listen(128)
-    
-    def shutdown(self):
-        self.socket.close()
-    
-    def accept_request(self,client_socket,client_address):
-        print(f"Accept request from {client_address}")
-        request = client_socket.recv(4096).decode('utf-8')
-        # handle request
-        response = self.handle_request(request)
-        client_socket.send(response.encode('utf-8'))
+        print(f"Server Started at http://{host}:{port}")
+        self.host = host
+        self.port = port
 
-        client_socket.shutdown(1)
-        client_socket.close()
+        # set_up
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind((self.host, self.port))
+        self.sock.listen(128)
+
+        #accept_request    def accept_request(self,client_socket,client_address):
+        while True:
+            client_sock, client_address=self.sock.accept()
+            # Thread.start(target=self.handle_request, args=(client_sock,client_address))
+            Thread(target=self.handle_request, args=(client_sock,client_address)).start
+        
+        #shut_down
+        if self.sock is not None:
+            self.sock.shutdown()
+            self.sock.close()
+
     
-    def handle_request(self, request):
-        # 将得到的data转为一行一行的列表
+    def handle_request(self, client_sock, client_address):
+        print(f"Accept request from {client_address}")
+        request = client_sock.recv(4096).decode('utf-8')
+
+        reponse=None
+        
         format_request = request.strip().split('\r\n')
-        # 将请求行分割
         request_headline = format_request[0].split()
-        # 请求的文件
+        
         request_file = request_headline[1][1:]
        
         if len(request_headline) == 3:
@@ -49,6 +50,10 @@ class HTTPServer:
             else:
                 return self.method_not_allowed()
                 # 405 Method Not Allowedhandle_error(405)
+        
+        client_sock.send(reponse.encode('utf-8'))
+        client_sock.shutdown(1)
+        client_sock.close()
     
     def has_permission_other(file_path):
         # Implement the logic to check if the file has permission for others.
