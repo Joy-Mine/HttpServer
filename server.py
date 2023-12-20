@@ -1,21 +1,21 @@
 import socket
 from threading import Thread
 import mimetypes
-import urllib.parse
-import http.cookies
 import argparse
 import os
 import mimetypes
+
+
 class HTTPServer:
     
     def run_server(self, host, port):
         print(f"Server Started at http://{host}:{port}")
-        self.host = host
-        self.port = port
+        # self.host = host
+        # self.port = port
 
         # set_up
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind((self.host, self.port))
+        self.sock.bind((host, port))
         self.sock.listen(128)
 
         #accept_request    def accept_request(self,client_socket,client_address):
@@ -31,29 +31,38 @@ class HTTPServer:
 
     
     def handle_request(self, client_sock, client_address):
-        print(f"Accept request from {client_address}")
-        request = client_sock.recv(4096).decode('utf-8')
-
-        reponse=None
+        try:
+            print(f"Accept request from {client_address}")
+            response=None
+            request = client_sock.recv(4096).decode('utf-8')
+            
+            request_lines = request.strip().split('\r\n')
+            request_headline = request_lines[0].split()
+            
+            # request_file = request_headline[1][1:]
         
-        format_request = request.strip().split('\r\n')
-        request_headline = format_request[0].split()
-        
-        request_file = request_headline[1][1:]
-       
-        if len(request_headline) == 3:
-            method, path, protocol = request_headline
-            if method == 'GET':
-                return self.handle_get(request_file)
-            elif method == 'POST':
-                return self.handle_post(request_file)
+            if len(request_headline) == 3:
+                method, path, protocol = request_headline
+                if method == 'GET':
+                    return self.handle_get(path)
+                elif method == 'HEAD':
+                    response = self.handle_head(path)
+                elif method == 'POST':
+                    request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
+                    response = self.handle_post(path, request_body)
+                else:
+                    return self.method_not_allowed()
+                    # 405 Method Not Allowedhandle_error(405)
             else:
-                return self.method_not_allowed()
-                # 405 Method Not Allowedhandle_error(405)
-        
-        client_sock.send(reponse.encode('utf-8'))
-        client_sock.shutdown(1)
-        client_sock.close()
+                response="HTTP/1.1 400 Bad Request\r\n\r\n"
+            
+        except Exception as e:
+            print(f"Error handling request: {e}")
+            response = "HTTP/1.1 500 Internal Server Error\r\n\r\n"
+        finally:
+            client_sock.send(response.encode('utf-8'))
+            client_sock.shutdown(1)
+            client_sock.close()
     
     def has_permission_other(file_path):
         # Implement the logic to check if the file has permission for others.
@@ -156,7 +165,7 @@ class HTTPServer:
 
 
     if __name__ == '__main__':
-        parser = argparse.ArgumentParser(description='Simple HTTP Server')
+        parser = argparse.ArgumentParser(description='HTTP Server')
         parser.add_argument('-i', '--host', type=str, default='localhost', help='Host name or IP address')
         parser.add_argument('-p', '--port', type=int, default=8080, help='Port number')
         args = parser.parse_args()
