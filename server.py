@@ -10,8 +10,6 @@ class HTTPServer:
     
     def run_server(self, host, port):
         print(f"Server Started at http://{host}:{port}")
-        # self.host = host
-        # self.port = port
 
         # set_up
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -22,7 +20,7 @@ class HTTPServer:
         while True:
             client_sock, client_address=self.sock.accept()
             # Thread.start(target=self.handle_request, args=(client_sock,client_address))
-            Thread(target=self.handle_request, args=(client_sock,client_address)).start
+            Thread(target=self.handle_request, args=(client_sock,client_address)).start()
         
         #shut_down
         if self.sock is not None:
@@ -51,7 +49,7 @@ class HTTPServer:
                     request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
                     response = self.handle_post(path, request_body)
                 else:
-                    return self.method_not_allowed()
+                    response=self.method_not_allowed()
                     # 405 Method Not Allowedhandle_error(405)
             else:
                 response="HTTP/1.1 400 Bad Request\r\n\r\n"
@@ -60,7 +58,7 @@ class HTTPServer:
             print(f"Error handling request: {e}")
             response = "HTTP/1.1 500 Internal Server Error\r\n\r\n"
         finally:
-            client_sock.send(response.encode('utf-8'))
+            client_sock.send(response)
             client_sock.shutdown(1)
             client_sock.close()
     
@@ -75,6 +73,19 @@ class HTTPServer:
         # Implement the logic to get the mime type of the file.
         # Return the mime type.
         return mimetypes.types_map[file_extension]
+
+    def handle_head(self, path):
+        print(path)
+        if (not os.path.exists(path)) or (not os.path.isfile(path)):
+            return self.resource_not_found()
+        elif(not self.has_permission_other(path)):
+            return self.resource_forbidden()
+        else:
+            builder = ResponseBuilder()
+            builder.set_status("200", "OK")
+            builder.add_header("Connection", "close")
+            builder.add_header("Content-Type", self.get_file_mime_type(path.split(".")[1]))
+            return builder.build()
 
     def handle_get(self, request_file):
         if (not os.path.exists(request_file)) or (not os.path.isfile(request_file)):
@@ -115,61 +126,55 @@ class HTTPServer:
 
 
 
-    def method_not_allowed(self):
-        """
-        Returns 405 not allowed status and gives allowed methods.
-        TODO: If you are not going to complete the `ResponseBuilder`,
-        This must be rewritten.
-        """
-        builder = ResponseBuilder()
-        builder.set_status("405", "METHOD NOT ALLOWED")
-        allowed = ", ".join(["GET", "POST"])
-        builder.add_header("Allow", allowed)
-        builder.add_header("Connection", "close")
-        return builder.build()
-
-
-    def get_file_contents(file_path):
+    def get_file_contents(self, file_path):
         with open(file_path, 'r') as file:
             return file.read()
+        
+    def resource_forbidden(self):
+        """
+        Returns 403 Forbidden status and sends back a 403.html page.
+        """
+        builder = ResponseBuilder()
+        builder.set_status("403", "Forbidden")
+        builder.add_header("Connection", "close")
+        builder.add_header("Content-Type", "text/html; charset=utf-8")
+        
+        try:
+            file_content = self.get_file_contents("403.html")
+            builder.set_body(file_content)
+        except IOError:
+            builder.set_body("<html><body><h1>403 Forbidden</h1></body></html>")
+
+        return builder.build()
 
     def resource_not_found(self):
         """
-        Returns 404 not found status and sends back our 404.html page.
-        """
-        mime_types = mimetypes.types_map
-        builder = ResponseBuilder()
-        builder.set_status("404", "NOT FOUND")
-        builder.add_header("Connection", "close")
-        builder.add_header("Content-Type", mime_types["html"])
-        builder.set_content(os.get_file_contents("404.html"))
-        return builder.build()
-
-    def resource_forbidden(self):
-        """
-        Returns 403 FORBIDDEN status and sends back our 403.html page.
+        Returns 404 Not Found status and sends back a 404.html page.
         """
         builder = ResponseBuilder()
-        builder.set_status("403", "FORBIDDEN")
+        builder.set_status("404", "Not Found")
         builder.add_header("Connection", "close")
-        builder.add_header("Content-Type", mimetypes.types_map["html"])
-        builder.set_content(os.get_file_contents("403.html"))
-        return builder.build()
-
+        builder.add_header("Content-Type", "text/html; charset=utf-8")
         
-    
+        try:
+            file_content = self.get_file_contents("404.html")
+            builder.set_body(file_content)
+        except IOError:
+            builder.set_body("<html><body><h1>404 Not Found</h1></body></html>")
 
-    
-    
+        return builder.build()
 
+    def method_not_allowed(self, allowed_methods):
+        """
+        Returns 405 Method Not Allowed status and indicates allowed methods.
+        """
+        builder = ResponseBuilder()
+        builder.set_status("405", "Method Not Allowed")
+        builder.add_header("Allow", ", ".join(allowed_methods))
+        builder.add_header("Connection", "close")
+        builder.set_body("<html><body><h1>405 Method Not Allowed</h1></body></html>")
 
-
-    if __name__ == '__main__':
-        parser = argparse.ArgumentParser(description='HTTP Server')
-        parser.add_argument('-i', '--host', type=str, default='localhost', help='Host name or IP address')
-        parser.add_argument('-p', '--port', type=int, default=8080, help='Port number')
-        args = parser.parse_args()
-        run_server(args.host, args.port)
+        return builder.build()
 
 
 class ResponseBuilder:
@@ -177,15 +182,13 @@ class ResponseBuilder:
         self.response = ''
         self.status = None
         self.headerline = ''
-        self.body = ''
+        self.body = b''
     
     def set_status(self, status_code, status_text):
-       # 生成状态行
-       self.status = f"HHTP/1.1 {status_code} {status_text}"
+       self.status = f"HTTP/1.1 {status_code} {status_text}"
     
-    def set_header(self, key, value):
-        # 生成首部行
-        self.headerline += f'{key}: {value}' + '\r\n'
+    def add_header(self, key, value):
+        self.headerline += f'{key}: {value}\r\n'
     
     def set_body(self, body):
         if isinstance(body, (bytes, bytearray)):
@@ -194,15 +197,16 @@ class ResponseBuilder:
             self.body = body.encode('utf-8')
     
     def build(self):
-        # 生成响应报文
-        self.response = self.status + '\r\n'
-        self.response += self.headerline
-        self.response += '\r\n'
-        self.response += '\r\n'
-        response = self.response.encode('utf-8')
-
-        # 如果body是文件，直接返回
-        response += self.body
-
+        self.response = (self.status + '\r\n' + self.headerline + '\r\n').encode('utf-8') + self.body
         return self.response
 
+    
+
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='HTTP Server')
+    parser.add_argument('-i', '--host', default='localhost', help='Host name or IP address')
+    parser.add_argument('-p', '--port', type=int, default=8080, help='Port number')
+    args = parser.parse_args()
+    HTTPServer().run_server(args.host, args.port)
