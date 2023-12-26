@@ -5,6 +5,9 @@ import argparse
 import os
 import mimetypes
 from datetime import datetime
+import base64
+import time
+import uuid
 
 
 class HTTPServer:
@@ -14,6 +17,7 @@ class HTTPServer:
 
         # set_up
         self.data_dir=data_dir
+        self.sessions={}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.bind((host, port))
         self.sock.listen(128)
@@ -38,29 +42,46 @@ class HTTPServer:
             
             request_lines = request.strip().split('\r\n')
             request_headline = request_lines[0].split()
+
+            headers = {}
+            for line in request_lines[1:]:
+                if not line:
+                    break
+                key, value = line.split(': ', 1)
+                headers[key] = value
             
-            # request_file = request_headline[1][1:]
-        
-            if len(request_headline) == 3:
-                method, path, protocol = request_headline
-                if method == 'GET':
-                    response = self.handle_get(path)
-                elif method == 'HEAD':
-                    response = self.handle_head(path)
-                elif method == 'POST':
-                    request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
-                    response = self.handle_post(path, request_body)
-                else:
-                    response=self.method_not_allowed_405({"GET","HEAD","POST"})
-                    # 405 Method Not Allowedhandle_error(405)
+            authorization = headers.get('Authorization', None)
+            if not authorization or not self.check_authorization(authorization):
+                session = headers.get('Cookie', None)
+                if not session or not self.check_session(session):
+                    response=self.unauthorized_401()
+                    return
+                username = self.get_session_username(authorization)
+                session_id = str(uuid.uuid4())
+                expiration_time = time.time() + 360000.0
+                self.sessions[session_id] = (username, expiration_time)
+                response=self.response_with_cookie(session_id)
             else:
-                # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
-                response=self.bad_request_400()
+                if len(request_headline) == 3:
+                    method, path, protocol = request_headline
+                    if method == 'GET':
+                        response = self.handle_get(path)
+                    elif method == 'HEAD':
+                        response = self.handle_head(path)
+                    elif method == 'POST':
+                        request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
+                        response = self.handle_post(path, request_body)
+                    else:
+                        response=self.method_not_allowed_405({"GET","HEAD","POST"})
+                        # 405 Method Not Allowedhandle_error(405)
+                else:
+                    # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
+                    response=self.bad_request_400()
             
         except Exception as e:
             print(f"Error handling request: {e}")
             # response = "HTTP/1.1 500 Internal Server Error\r\n\r\n".encode("utf-8")
-            response=self.resource_server_error_500()
+            response=self.server_error_500()
         finally:
             print(response.decode("utf-8"))
             client_sock.send(response)
@@ -82,9 +103,9 @@ class HTTPServer:
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
         print(real_path)
         if (not os.path.exists(real_path)):
-            return self.resource_notfound_404()
+            return self.not_found_404()
         elif(not self.has_permission_other(real_path)):
-            return self.resource_forbidden_403()
+            return self.forbidden_403()
         else:
             builder = ResponseBuilder()
             builder.set_status("200", "OK")
@@ -97,9 +118,9 @@ class HTTPServer:
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
         print(real_path)
         if (not os.path.exists(real_path)):
-            return self.resource_notfound_404()
+            return self.not_found_404()
         elif(not self.has_permission_other(real_path)):
-            return self.resource_forbidden_403()
+            return self.forbidden_403()
         else:
             builder = ResponseBuilder()
             builder.set_status("200", "OK")
@@ -127,7 +148,43 @@ class HTTPServer:
             return builder.build()    
 
 
-
+    def check_session(self, session):
+        session_id = session.split("session-id=")[1]
+        # Check if the session cookie is valid and not expired
+        if session_id in self.sessions:
+            _, expiration_time = self.sessions[session_id]
+            result = expiration_time > time.time()
+            return result
+        return False
+    def check_user_right(self, session_cookie, user):
+        session_name = self.sessions[session_cookie][0]
+        print(f'sessionname is {session_name},   user is {user}')
+        if session_name != user:
+            return False
+        else:
+            return True
+    def check_authorization(authorization):
+        credentials = {'client1': '123',
+                            'client2':'123',
+                            'client3':'123'}
+        _, encoded_info = authorization.split(' ')
+        decoded_info = base64.b64decode(encoded_info).decode('utf-8')
+        print(decoded_info)
+        result = False
+        username , password = decoded_info.split(":")[0], decoded_info.split(":")[1]
+        if username in credentials:
+            if password == credentials[username]:
+                result = True
+        return result
+    def get_session_username(auth_header):
+        _, encoded_info = auth_header.split(' ')
+        decoded_info = base64.b64decode(encoded_info).decode('utf-8')
+        username, _ = decoded_info.split(':', 1)
+        return username
+    
+    def response_with_cookie(session_id):
+        response_headers = f'HTTP/1.1 200 OK\r\nSet-Cookie: session-id={session_id}; Path=/\r\n\r\n'
+        return response_headers.encode('utf-8')
 
 
 
@@ -152,8 +209,26 @@ class HTTPServer:
         except IOError:
             builder.set_body("<html><body><h1>400 Bad Request</h1></body></html>")
         return builder.build()
+    
+    def unauthorized_401(self):
+        """
+        Returns 401 Unauthorized status and sends back a 401.html page.
+        """
+        builder = ResponseBuilder()
+        builder.set_status("401", "Unauthorized")
+        builder.add_header("Connection", "close")
+        builder.add_header("Content-Type", "text/html; charset=utf-8")
+        current_time = datetime.now().strftime("%a, %d %b %Y %H:%M:%S GMT")
+        builder.add_header("Date", current_time)
+        builder.add_header("Last-Modified", current_time)
+        try:
+            file_content = self.get_file_contents("401.html")
+            builder.set_body(file_content)
+        except IOError:
+            builder.set_body("<html><body><h1>401 Unauthorized</h1></body></html>")
+        return builder.build()
 
-    def resource_forbidden_403(self):
+    def forbidden_403(self):
         """
         Returns 403 Forbidden status and sends back a 403.html page.
         """
@@ -171,7 +246,7 @@ class HTTPServer:
             builder.set_body("<html><body><h1>403 Forbidden</h1></body></html>")
         return builder.build()
 
-    def resource_notfound_404(self):
+    def not_found_404(self):
         """
         Returns 404 Not Found status and sends back a 404.html page.
         """
@@ -203,7 +278,7 @@ class HTTPServer:
         builder.set_body("<html><body><h1>405 Method Not Allowed</h1></body></html>")
         return builder.build()
 
-    def resource_server_error_500(self):
+    def server_error_500(self):
         """
         Returns 500 Internal Server Error status and sends back a 500.html page.
         """
