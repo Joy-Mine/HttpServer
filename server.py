@@ -128,7 +128,37 @@ class HTTPServer:
             # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[1]))
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
+    
+    def handle_get(self, file_path):
+        real_path = os.path.join(self.data_dir, file_path.strip('/'))
+        print(real_path)
         
+        if not os.path.exists(real_path):
+            return self.not_found_404()
+        elif not self.has_permission_other(real_path):
+            return self.forbidden_403()
+        else:
+            builder = ResponseBuilder()
+            builder.set_status("200", "OK")
+            builder.add_header("Connection", "close")
+
+            if os.path.isfile(real_path):
+                with open(real_path, 'rb') as file:
+                    builder.set_body(file.read())
+                # 可以根据文件类型设置不同的 Content-Type
+                # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[-1]))
+            elif os.path.isdir(real_path):
+                directory_listing = "<html><body><ul>"
+                for item in os.listdir(real_path):
+                    directory_listing += f"<li>{item}</li>"
+                directory_listing += "</ul></body></html>"
+                builder.set_body(directory_listing)
+                builder.add_header("Content-Type", "text/html; charset=UTF-8")
+            else:
+                builder.set_body("<html><body><h1>Unable to handle the request</h1></body></html>")
+                builder.add_header("Content-Type", "text/html; charset=UTF-8")
+            return builder.build()
+
     def handle_post(self, file_path, request_body):
         if (not os.path.exists(file_path)):
             return self.resource_not_found()
