@@ -39,6 +39,7 @@ class HTTPServer:
             print(f"Accept request from {client_address}")
             response=None
             request = client_sock.recv(4096).decode('utf-8')
+            print(request)
             
             request_lines = request.strip().split('\r\n')
             request_headline = request_lines[0].split()
@@ -56,12 +57,14 @@ class HTTPServer:
                 if not session or not self.check_session(session):
                     response=self.unauthorized_401()
                     return
-                username = self.get_session_username(authorization)
+                # 响应头不包含Authorization(或未通过验证)但包含Cookie: Session-id
+                username = self.get_session_username(session)
                 session_id = str(uuid.uuid4())
                 expiration_time = time.time() + 360000.0
                 self.sessions[session_id] = (username, expiration_time)
                 response=self.response_with_cookie(session_id)
             else:
+                # 响应头包含Authorization且通过验证
                 if len(request_headline) == 3:
                     method, path, protocol = request_headline
                     if method == 'GET':
@@ -79,7 +82,7 @@ class HTTPServer:
                     response=self.bad_request_400()
             
         except Exception as e:
-            print(f"Error handling request: {e}")
+            print(f"Exception in handling request: {e}")
             # response = "HTTP/1.1 500 Internal Server Error\r\n\r\n".encode("utf-8")
             response=self.server_error_500()
         finally:
@@ -113,26 +116,11 @@ class HTTPServer:
             # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[1]))
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
-
-    def handle_get(self, file_path):
-        real_path = os.path.join(self.data_dir, file_path.strip('/'))
-        print(real_path)
-        if (not os.path.exists(real_path)):
-            return self.not_found_404()
-        elif(not self.has_permission_other(real_path)):
-            return self.forbidden_403()
-        else:
-            builder = ResponseBuilder()
-            builder.set_status("200", "OK")
-            builder.add_header("Connection", "close")
-            # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[1]))
-            builder.add_header("Content-Type", "text/html; charset=UTF-8")
-            return builder.build()
     
     def handle_get(self, file_path):
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
         print(real_path)
-        
+
         if not os.path.exists(real_path):
             return self.not_found_404()
         elif not self.has_permission_other(real_path):
@@ -179,13 +167,18 @@ class HTTPServer:
 
 
     def check_session(self, session):
-        session_id = session.split("session-id=")[1]
-        # Check if the session cookie is valid and not expired
-        if session_id in self.sessions:
-            _, expiration_time = self.sessions[session_id]
-            result = expiration_time > time.time()
-            return result
-        return False
+        try:
+            session_id = session.split("session-id=")[1]
+            # Check if the session cookie is valid and not expired
+            if session_id in self.sessions:
+                _, expiration_time = self.sessions[session_id]
+                result = expiration_time > time.time()
+                return result
+            return False
+        except Exception as e:
+            print(f"Exception in check_session{e}")
+        finally:
+            return None
     def check_user_right(self, session_cookie, user):
         session_name = self.sessions[session_cookie][0]
         print(f'sessionname is {session_name},   user is {user}')
@@ -193,19 +186,20 @@ class HTTPServer:
             return False
         else:
             return True
-    def check_authorization(authorization):
-        credentials = {'client1': '123',
-                            'client2':'123',
-                            'client3':'123'}
-        _, encoded_info = authorization.split(' ')
-        decoded_info = base64.b64decode(encoded_info).decode('utf-8')
-        print(decoded_info)
-        result = False
-        username , password = decoded_info.split(":")[0], decoded_info.split(":")[1]
-        if username in credentials:
-            if password == credentials[username]:
-                result = True
-        return result
+    def check_authorization(self, authorization):
+        credentials = {'client1': '123', 
+                       'client2': '123', 
+                       'client3': '123'}
+        try:
+            scheme, encoded_info = authorization.split(' ')
+            if scheme != "Basic":
+                return False
+            decoded_info = base64.b64decode(encoded_info).decode('utf-8')
+            username, password = decoded_info.split(":")
+            return credentials.get(username) == password
+        except (ValueError, IndexError, base64.binascii.Error):
+            # 处理各种潜在异常
+            return False
     def get_session_username(auth_header):
         _, encoded_info = auth_header.split(' ')
         decoded_info = base64.b64decode(encoded_info).decode('utf-8')
