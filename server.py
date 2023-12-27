@@ -73,7 +73,7 @@ class HTTPServer:
                         response = self.handle_head(path)
                     elif method == 'POST':
                         request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
-                        response = self.handle_post(path, request_body)
+                        response = self.handle_post(client_sock,path, request_body,session)
                     else:
                         response=self.method_not_allowed_405({"GET","HEAD","POST"})
                         # 405 Method Not Allowedhandle_error(405)
@@ -147,14 +147,27 @@ class HTTPServer:
                 builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
 
-    def handle_post(self, file_path, request_body):
+    def handle_post(self, client_sock,file_path, request_body,session):
         if (not os.path.exists(file_path)):
-            return self.resource_not_found()
+            return self.not_found_404()
             # 404 Not Found
         elif(not self.has_permission_other(file_path)):
-            return self.resource_forbidden()
+            return self.forbidden_403()
             # 403 Forbidden
         else:
+            post_type = file_path.split("?")[1]
+            post_path = file_path.split("?")[0]
+            if post_type == "/upload":
+                self.handle_upload(client_sock, post_path, request_body,session)
+                return
+            elif post_type == "/delete":
+                # 添加delete
+                return
+            else:
+                return self.bad_request_400()
+                # 400 Bad Request
+
+
             builder = ResponseBuilder()
 
             builder.set_status("200", "OK")
@@ -163,9 +176,67 @@ class HTTPServer:
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             builder.set_body(file_path)
 
-            return builder.build()    
+            return builder.build()
+    
 
 
+
+    def handle_upload(self, client_sock, file_path, request_body,session): 
+        # 构建用户专用目录
+        temp = file_path.split("=")[1]
+        user_dir = os.path.join("data/", temp)
+        user_name = file_path.split("")[1]
+
+        session_name = self.sessions[session][0]
+        if session_name != user_name:
+            return self.forbidden_403()
+            # 403 Forbidden
+        if not os.path.exists(user_dir):
+            return self.not_found_404()
+            # 404 Not Found
+        
+        # 接受文件并获取文件名
+
+        # 保存文件
+        file_name = "temp.txt"
+        # 先这么写文件名
+        final_path = os.path.join(user_dir, file_name)
+        with open(final_path, 'wb') as file:
+            file.write(request_body)
+        # 200 OK
+        builder = ResponseBuilder()
+        builder.set_status("200", "OK")
+        builder.add_header("Connection", "close")
+        builder.add_header("Content-Type", "text/html; charset=UTF-8")
+        builder.set_body(file_path)
+        return builder.build()
+
+    def handle_delete(self, client_sock, file_path, request_body,session):
+        # 构建用户专用目录
+        temp = file_path.split("=")[1]
+        user_dir = os.path.join("data/", temp)
+        user_name = file_path.split("")[1]
+
+        session_name = self.sessions[session][0]
+        if session_name != user_name:
+            return self.forbidden_403()
+            # 403 Forbidden
+        if not os.path.exists(user_dir):
+            return self.not_found_404()
+            # 404 Not Found
+        
+        os.remove(user_dir)
+        # 200 OK
+        builder = ResponseBuilder()
+        builder.set_status("200", "OK")
+        builder.add_header("Connection", "close")
+        builder.add_header("Content-Type", "text/html; charset=UTF-8")
+        builder.set_body(file_path)
+        return builder.build()
+    
+
+
+        
     def check_session(self, session):
         try:
             session_id = session.split("session-id=")[1]
