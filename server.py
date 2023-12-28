@@ -35,61 +35,71 @@ class HTTPServer:
 
     
     def handle_request(self, client_sock, client_address):
-        try:
-            print(f"Accept request from {client_address}")
-            response=None
-            request = client_sock.recv(4096).decode('utf-8')
-            print(request)
-            
-            request_lines = request.strip().split('\r\n')
-            request_headline = request_lines[0].split()
+        while True:
+            try:
+                print(f"Accept request from {client_address}")
+                response=None
+                request = client_sock.recv(4096).decode('utf-8')
+                print("request:")
+                print(request)
+                
+                request_lines = request.strip().split('\r\n')
+                request_headline = request_lines[0].split()
 
-            headers = {}
-            for line in request_lines[1:]:
-                if not line:
-                    break
-                key, value = line.split(': ', 1)
-                headers[key] = value
-            
-            authorization = headers.get('Authorization', None)
-            if not authorization or not self.check_authorization(authorization):
-                session = headers.get('Cookie', None)
-                if not session or not self.check_session(session):
-                    response=self.unauthorized_401()
-                    return
-                # 响应头不包含Authorization(或未通过验证)但包含Cookie: Session-id
-                username = self.get_session_username(session)
-                session_id = str(uuid.uuid4())
-                expiration_time = time.time() + 360000.0
-                self.sessions[session_id] = (username, expiration_time)
-                response=self.response_with_cookie(session_id)
-            else:
-                # 响应头包含Authorization且通过验证
-                if len(request_headline) == 3:
-                    method, path, protocol = request_headline
-                    if method == 'GET':
-                        response = self.handle_get(path)
-                    elif method == 'HEAD':
-                        response = self.handle_head(path)
-                    elif method == 'POST':
-                        request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
-                        response = self.handle_post(client_sock,path, request_body,session)
-                    else:
-                        response=self.method_not_allowed_405({"GET","HEAD","POST"})
-                        # 405 Method Not Allowedhandle_error(405)
+                headers = {}
+                for line in request_lines[1:]:
+                    if not line:
+                        break
+                    key, value = line.split(': ', 1)
+                    headers[key] = value
+                
+                keep_alive=True
+                authorization = headers.get('Authorization', None)
+                if not authorization or not self.check_authorization(authorization):
+                    session = headers.get('Cookie', None)
+                    if not session or not self.check_session(session):
+                        response=self.unauthorized_401()
+                        keep_alive=False
+                        return
+                    # 响应头不包含Authorization(或未通过验证)但包含Cookie: Session-id且通过验证
+                    username = self.get_session_username(session)
+                    session_id = str(uuid.uuid4())
+                    expiration_time = time.time() + 360000.0
+                    self.sessions[session_id] = (username, expiration_time)
+                    response=self.response_with_cookie(session_id)
                 else:
-                    # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
-                    response=self.bad_request_400()
-            
-        except Exception as e:
-            print(f"Exception in handling request: {e}")
-            # response = "HTTP/1.1 500 Internal Server Error\r\n\r\n".encode("utf-8")
-            response=self.server_error_500()
-        finally:
-            print(response.decode("utf-8"))
-            client_sock.send(response)
-            client_sock.shutdown(1)
-            client_sock.close()
+                    # 响应头包含Authorization且通过验证
+                    if len(request_headline) == 3:
+                        method, path, protocol = request_headline
+                        if method == 'GET':
+                            response = self.handle_get(path)
+                        elif method == 'HEAD':
+                            response = self.handle_head(path)
+                        elif method == 'POST':
+                            request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
+                            response = self.handle_post(client_sock,path, request_body,session)
+                        else:
+                            response=self.method_not_allowed_405({"GET","HEAD","POST"})
+                            keep_alive=False
+                            # 405 Method Not Allowedhandle_error(405)
+                    else:
+                        # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
+                        response=self.bad_request_400()
+                        keep_alive=False
+                
+            except Exception as e:
+                print(f"Exception in handling request: {e}")
+                # response = "HTTP/1.1 500 Internal Server Error\r\n\r\n".encode("utf-8")
+                response=self.server_error_500()
+                keep_alive=False
+            finally:
+                print("response:")
+                print(response.decode("utf-8"))
+                if (not keep_alive):
+                    client_sock.send(response)
+                    client_sock.shutdown(1)
+                    client_sock.close()
+                    break
     
     def has_permission_other(self, file_path):
         # real_path = os.path.join(self.data_dir, file_path.strip('/'))
