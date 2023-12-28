@@ -112,7 +112,7 @@ class HTTPServer:
         else:
             builder = ResponseBuilder()
             builder.set_status("200", "OK")
-            builder.add_header("Connection", "close")
+            builder.add_header("Connection", "keep-alive")
             # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[1]))
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
@@ -128,7 +128,7 @@ class HTTPServer:
         else:
             builder = ResponseBuilder()
             builder.set_status("200", "OK")
-            builder.add_header("Connection", "close")
+            builder.add_header("Connection", "keep-alive")
 
             if os.path.isfile(real_path):
                 with open(real_path, 'rb') as file:
@@ -158,7 +158,7 @@ class HTTPServer:
             builder = ResponseBuilder()
 
             builder.set_status("200", "OK")
-            builder.add_header("Connection", "close")
+            builder.add_header("Connection", "keep-alive")
             # builder.add_header("Content-Type", self.get_file_mime_type(file_path.split(".")[1]))
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             builder.set_body(file_path)
@@ -193,6 +193,7 @@ class HTTPServer:
         try:
             scheme, encoded_info = authorization.split(' ')
             if scheme != "Basic":
+                print("暂不支持其它认证方案")
                 return False
             decoded_info = base64.b64decode(encoded_info).decode('utf-8')
             username, password = decoded_info.split(":")
@@ -320,23 +321,20 @@ class HTTPServer:
             builder.set_body("<html><body><h1>500 Internal Server Error</h1></body></html>")
         return builder.build()
 
-def build_example_response():
-    # Create a response builder instance
-    response_builder = ResponseBuilder()
-    # Set the status
-    response_builder.set_status(200, "OK")
-    # Add dynamic headers
-    current_time = datetime.now().strftime("%a, %d %b %Y %H:%M:%S GMT")
-    response_builder.add_header("Date", current_time)
-    response_builder.add_header("Server", "Apache/2.4.41 (Ubuntu)")  # Example server info
-    response_builder.add_header("Last-Modified", current_time)  # Assuming the resource was just modified
-    response_builder.add_header("Content-Length", "1234")  # Example content length
-    response_builder.add_header("Content-Type", "text/html; charset=UTF-8")
-    response_builder.add_header("Connection", "keep-alive")
-    # Set body (empty for HEAD request)
-    response_builder.set_body(b'')
-    # Build the response
-    return response_builder.build()
+    def example_response():
+        response_builder = ResponseBuilder()
+        response_builder.set_status(200, "OK")
+        
+        current_time = datetime.now().strftime("%a, %d %b %Y %H:%M:%S GMT")
+        response_builder.add_header("Date", current_time)
+        response_builder.add_header("Server", "Apache/2.4.41 (Ubuntu)")  # Example server info
+        response_builder.add_header("Last-Modified", current_time)  # Assuming the resource was just modified
+        response_builder.add_header("Content-Length", "1234")  # Example content length
+        response_builder.add_header("Content-Type", "text/html; charset=UTF-8")
+        response_builder.add_header("Connection", "keep-alive")
+        
+        response_builder.set_body(b'')
+        return response_builder.build()
 
 class ResponseBuilder:
     def __init__(self):
