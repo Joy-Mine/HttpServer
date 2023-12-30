@@ -8,7 +8,7 @@ from datetime import datetime
 import base64
 import time
 import uuid
-
+import json
 
 class HTTPServer:
     
@@ -56,19 +56,22 @@ class HTTPServer:
                 keep_alive=True
                 authorization = headers.get('Authorization', None)
                 if not authorization or not self.check_authorization(authorization):
+                    response=self.unauthorized_401()
+                    keep_alive=False
+                    return
+                else:
                     session = headers.get('Cookie', None)
-                    if not session or not self.check_session(session):
+                    if not session:
+                        username = self.get_session_username(authorization)
+                        session_id = str(uuid.uuid4())
+                        expiration_time = time.time() + 3600.0
+                        self.sessions[session_id] = (username, expiration_time)
+                        response=self.response_with_session(session_id)
+                        return
+                    if not self.check_session(session):
                         response=self.unauthorized_401()
                         keep_alive=False
                         return
-                    # 响应头不包含Authorization(或未通过验证)但包含Cookie: Session-id且通过验证
-                    username = self.get_session_username(session)
-                    session_id = str(uuid.uuid4())
-                    expiration_time = time.time() + 360000.0
-                    self.sessions[session_id] = (username, expiration_time)
-                    response=self.response_with_cookie(session_id)
-                else:
-                    # 响应头包含Authorization且通过验证
                     if len(request_headline) == 3:
                         method, path, protocol = request_headline
                         if method == 'GET':
@@ -95,8 +98,8 @@ class HTTPServer:
             finally:
                 print("response:")
                 print(response.decode("utf-8"))
+                client_sock.sendall(response)
                 if (not keep_alive):
-                    client_sock.send(response)
                     client_sock.shutdown(1)
                     client_sock.close()
                     break
@@ -105,13 +108,11 @@ class HTTPServer:
         # real_path = os.path.join(self.data_dir, file_path.strip('/'))
         file_stat = os.stat(file_path)
         return file_stat.st_mode & 0o004
-    
     def get_file_mime_type(self, file_extension):
         # 不保证正确
         # Implement the logic to get the mime type of the file.
         # Return the mime type.
         return mimetypes.types_map[file_extension]
-
     def handle_head(self, file_path):
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
         print(real_path)
@@ -127,36 +128,91 @@ class HTTPServer:
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
     
-    def handle_get(self, file_path):
-        real_path = os.path.join(self.data_dir, file_path.strip('/'))
-        print(real_path)
-        
+    # def handle_get(self, file_path):
+    #     real_path = os.path.join(self.data_dir, file_path.strip('/'))
+    #     print(real_path)
+    #     if not os.path.exists(real_path):
+    #         return self.not_found_404()
+    #     elif not self.has_permission_other(real_path):
+    #         return self.forbidden_403()
+    #     else:
+    #         builder = ResponseBuilder()
+    #         builder.set_status("200", "OK")
+    #         builder.add_header("Connection", "keep-alive")
 
+    #         if os.path.isfile(real_path):
+    #             with open(real_path, 'rb') as file:
+    #                 builder.set_body(file.read())
+    #             # 可以根据文件类型设置不同的 Content-Type
+    #             # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[-1]))
+    #         elif os.path.isdir(real_path):
+    #             directory_listing = "<html><body><ul>"
+    #             for item in os.listdir(real_path):
+    #                 directory_listing += f"<li>{item}</li>"
+    #             directory_listing += "</ul></body></html>"
+    #             builder.set_body(directory_listing)
+    #             builder.add_header("Content-Type", "text/html; charset=UTF-8")
+    #         else:
+    #             builder.set_body("<html><body><h1>Unable to handle the request</h1></body></html>")
+    #             builder.add_header("Content-Type", "text/html; charset=UTF-8")
+    #         return builder.build()
+    def get_query_param(self, url, param_name):
+        # Example usage:
+        # url = '/11912113/?SUSTech-HTTP=1'
+        # param_value = self.get_query_param(url, 'SUSTech-HTTP')
+        # print(param_value)  # Output should be '1'
+        query_string_start = url.find('?')
+        if query_string_start == -1:
+            return None
+        query_string = url[query_string_start + 1:]
+        params = query_string.split('&')
+        for param in params:
+            key_value = param.split('=')
+            if len(key_value) == 2:
+                key, value = key_value
+                if key == param_name:
+                    return value
+        return None
+    def handle_get(self, file_path):
+        # Extract the query parameter SUSTech-HTTP if it exists
+        sustech_http_value = self.get_query_param(file_path, "SUSTech-HTTP")
+        file_path = file_path.split('?')[0]  # Remove the query string from the file path
+        real_path = os.path.join(self.data_dir, file_path.strip('/'))
         if not os.path.exists(real_path):
             return self.not_found_404()
-        elif not self.has_permission_other(real_path):
-            return self.forbidden_403()
+        if os.path.isdir(real_path) and sustech_http_value in (None, '0'):
+            return self.directory_listing(real_path)
+        elif os.path.isdir(real_path) and sustech_http_value == '1':
+            return self.directory_metadata(real_path)
+        elif os.path.isfile(real_path):
+            return self.file_content(real_path)
         else:
-            builder = ResponseBuilder()
-            builder.set_status("200", "OK")
-            builder.add_header("Connection", "keep-alive")
+            return self.bad_request_400()
+    def directory_listing(self, directory_path):
+        items = os.listdir(directory_path)
+        links = ['<a href="/{0}">{0}</a>'.format(item) for item in items]
+        body = '<html><body><h1>Directory listing for {0}</h1><ul>{1}</ul></body></html>'.format(
+            directory_path, ''.join(f'<li>{link}</li>' for link in links))
+        return self.build_response("200", "OK", "text/html; charset=UTF-8", body)
+    def directory_metadata(self, directory_path):
+        items = os.listdir(directory_path)
+        body = json.dumps(items)
+        return self.build_response("200", "OK", "application/json", body)
+    def file_content(self, file_path):
+        mime_type, _ = mimetypes.guess_type(file_path)
+        with open(file_path, 'rb') as file:
+            body = file.read()
+        return self.build_response("200", "OK", mime_type, body)
+    def build_response(self, status_code, status_text, content_type, body):
+        headers = {
+            "Content-Type": content_type,
+            "Content-Length": str(len(body)),
+            "Connection": "Keep-Alive"
+        }
+        response_line = "HTTP/1.1 {0} {1}\r\n".format(status_code, status_text)
+        header_lines = "\r\n".join("{0}: {1}".format(k, v) for k, v in headers.items())
+        return "{0}{1}\r\n\r\n{2}".format(response_line, header_lines, body).encode('utf-8')
 
-            if os.path.isfile(real_path):
-                with open(real_path, 'rb') as file:
-                    builder.set_body(file.read())
-                # 可以根据文件类型设置不同的 Content-Type
-                # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[-1]))
-            elif os.path.isdir(real_path):
-                directory_listing = "<html><body><ul>"
-                for item in os.listdir(real_path):
-                    directory_listing += f"<li>{item}</li>"
-                directory_listing += "</ul></body></html>"
-                builder.set_body(directory_listing)
-                builder.add_header("Content-Type", "text/html; charset=UTF-8")
-            else:
-                builder.set_body("<html><body><h1>Unable to handle the request</h1></body></html>")
-                builder.add_header("Content-Type", "text/html; charset=UTF-8")
-            return builder.build()
 
     def handle_post(self, client_sock,file_path, request_body,session):
         try:
@@ -180,9 +236,6 @@ class HTTPServer:
         except Exception as e:
             print(f"Exception in handle_post: {e}")
             return self.server_error_500()
-
-
-
     def handle_upload(self, client_sock, file_path, request_body,session): 
         # 构建用户专用目录
         temp = file_path.split("=")[1]
@@ -229,13 +282,11 @@ class HTTPServer:
         builder.add_header("Content-Type", "text/html; charset=UTF-8")
         builder.set_body(file_path)
         return builder.build()
-
     def handle_delete(self, client_sock, file_path, request_body,session):
         # 构建用户专用目录
         temp = file_path.split("=")[1]
         user_dir = os.path.join("data/", temp)
         user_name = file_path.split("")[1]
-
         session_name = self.sessions[session][0]
         if session_name != user_name:
             return self.forbidden_403()
@@ -243,7 +294,6 @@ class HTTPServer:
         if not os.path.exists(user_dir):
             return self.not_found_404()
             # 404 Not Found
-        
         try:
             os.remove(user_dir)
             # 200 OK
@@ -259,7 +309,6 @@ class HTTPServer:
             # 500 Internal Server Error
     
 
-
         
     def check_session(self, session):
         try:
@@ -269,7 +318,8 @@ class HTTPServer:
                 _, expiration_time = self.sessions[session_id]
                 result = expiration_time > time.time()
                 return result
-            return False
+            else:
+                return None
         except Exception as e:
             print(f"Exception in check_session{e}")
         finally:
@@ -281,6 +331,11 @@ class HTTPServer:
             return False
         else:
             return True
+    def get_session_username(auth_header):
+        _, encoded_info = auth_header.split(' ')
+        decoded_info = base64.b64decode(encoded_info).decode('utf-8')
+        username, _ = decoded_info.split(':', 1)
+        return username
     def check_authorization(self, authorization):
         credentials = {'client1': '123', 
                        'client2': '123', 
@@ -296,13 +351,8 @@ class HTTPServer:
         except (ValueError, IndexError, base64.binascii.Error):
             # 处理各种潜在异常
             return False
-    def get_session_username(auth_header):
-        _, encoded_info = auth_header.split(' ')
-        decoded_info = base64.b64decode(encoded_info).decode('utf-8')
-        username, _ = decoded_info.split(':', 1)
-        return username
     
-    def response_with_cookie(session_id):
+    def response_with_session(session_id):
         response_headers = f'HTTP/1.1 200 OK\r\nSet-Cookie: session-id={session_id}; Path=/\r\n\r\n'
         return response_headers.encode('utf-8')
 
@@ -311,7 +361,6 @@ class HTTPServer:
     def get_file_contents(self, file_path):
         with open(file_path, 'r') as file:
             return file.read()
-    
     def bad_request_400(self):
         """
         Returns 400 Bad Request status and sends back a 400.html page.
