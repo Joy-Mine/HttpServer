@@ -130,6 +130,7 @@ class HTTPServer:
     def handle_get(self, file_path):
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
         print(real_path)
+        
 
         if not os.path.exists(real_path):
             return self.not_found_404()
@@ -159,6 +160,7 @@ class HTTPServer:
 
     def handle_post(self, client_sock,file_path, request_body,session):
         try:
+
             if (not os.path.exists(file_path)):
                 return self.not_found_404()
                 # 404 Not Found
@@ -166,8 +168,8 @@ class HTTPServer:
                 return self.forbidden_403()
                 # 403 Forbidden
             else:
-                post_type = file_path.split("?")[1]
-                post_path = file_path.split("?")[0]
+                post_type = file_path.split("?")[0]
+                post_path = file_path.split("?")[1]
                 if post_type == "/upload":
                     return self.handle_upload(client_sock, post_path, request_body,session)
                 elif post_type == "/delete":
