@@ -95,8 +95,8 @@ class HTTPServer:
             finally:
                 print("response:")
                 print(response.decode("utf-8"))
+                client_sock.sendall(response)
                 if (not keep_alive):
-                    client_sock.send(response)
                     client_sock.shutdown(1)
                     client_sock.close()
                     break
