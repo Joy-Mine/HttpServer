@@ -158,26 +158,36 @@ class HTTPServer:
             return builder.build()
 
     def handle_post(self, client_sock,file_path, request_body,session):
-        try:
-            if (not os.path.exists(file_path)):
-                return self.not_found_404()
-                # 404 Not Found
-            elif(not self.has_permission_other(file_path)):
-                return self.forbidden_403()
-                # 403 Forbidden
+        if (not os.path.exists(file_path)):
+            return self.not_found_404()
+            # 404 Not Found
+        elif(not self.has_permission_other(file_path)):
+            return self.forbidden_403()
+            # 403 Forbidden
+        else:
+            post_type = file_path.split("?")[1]
+            post_path = file_path.split("?")[0]
+            if post_type == "/upload":
+                self.handle_upload(client_sock, post_path, request_body,session)
+                return
+            elif post_type == "/delete":
+                # 添加delete
+                return
             else:
-                post_type = file_path.split("?")[1]
-                post_path = file_path.split("?")[0]
-                if post_type == "/upload":
-                    return self.handle_upload(client_sock, post_path, request_body,session)
-                elif post_type == "/delete":
-                    return self.handle_delete(client_sock, post_path, request_body,session)
-                else:
-                    return self.bad_request_400()
-                    # 400 Bad Request
-        except Exception as e:
-            print(f"Exception in handle_post: {e}")
-            return self.server_error_500()
+                return self.bad_request_400()
+                # 400 Bad Request
+
+
+            builder = ResponseBuilder()
+
+            builder.set_status("200", "OK")
+            builder.add_header("Connection", "keep-alive")
+            # builder.add_header("Content-Type", self.get_file_mime_type(file_path.split(".")[1]))
+            builder.add_header("Content-Type", "text/html; charset=UTF-8")
+            builder.set_body(file_path)
+
+            return builder.build()
+    
 
 
 
@@ -196,30 +206,13 @@ class HTTPServer:
             # 404 Not Found
         
         # 接受文件并获取文件名
-        # 以行为单位分割request_body
-        file_body = request_body.split("\r\n\r\n")
-        part1 = file_body[1]
-        part2 = file_body[2]
-        # 以boundary为分割符分割part1
-        name_line = part1.split("\r\n")[1]
-        file_content = part2.split("\r\n")[0]
-        # 获取文件名
-        file_name_index = name_line.find("filename=")
-        file_name_start = file_name_index+10
-        file_name_end = name_line.find('"', file_name_start)
-        file_name = name_line[file_name_start:file_name_end]
-        if file_name_index == -1:
-            return self.bad_request_400()
-            # 400 Bad Request
-        else:
-            file_name_start = file_name_index+10
-            file_name_end = name_line.find('"', file_name_start)
-            file_name = name_line[file_name_start:file_name_end]
 
-
+        # 保存文件
+        file_name = "temp.txt"
+        # 先这么写文件名
         final_path = os.path.join(user_dir, file_name)
         with open(final_path, 'wb') as file:
-            file.write(file_content.encode("utf-8"))
+            file.write(request_body)
         # 200 OK
         builder = ResponseBuilder()
         builder.set_status("200", "OK")
@@ -242,19 +235,14 @@ class HTTPServer:
             return self.not_found_404()
             # 404 Not Found
         
-        try:
-            os.remove(user_dir)
-            # 200 OK
-            builder = ResponseBuilder()
-            builder.set_status("200", "OK")
-            builder.add_header("Connection", "close")
-            builder.add_header("Content-Type", "text/html; charset=UTF-8")
-            builder.set_body(file_path)
-            return builder.build()
-        except Exception as e:
-            print(f"Exception in handle_delete: {e}")
-            return self.server_error_500()
-            # 500 Internal Server Error
+        os.remove(user_dir)
+        # 200 OK
+        builder = ResponseBuilder()
+        builder.set_status("200", "OK")
+        builder.add_header("Connection", "close")
+        builder.add_header("Content-Type", "text/html; charset=UTF-8")
+        builder.set_body(file_path)
+        return builder.build()
     
 
 
