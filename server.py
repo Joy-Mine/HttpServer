@@ -9,6 +9,8 @@ import base64
 import time
 import uuid
 import json
+import re
+
 
 class HTTPServer:
     
@@ -75,7 +77,10 @@ class HTTPServer:
                     if len(request_headline) == 3:
                         method, path, protocol = request_headline
                         if method == 'GET':
-                            response = self.handle_get(path)
+                            if headers.get('Range') is not None:
+                                response=self.handle_get_range(path)
+                            else:
+                                response = self.handle_get(path)
                         elif method == 'HEAD':
                             response = self.handle_head(path)
                         elif method == 'POST':
@@ -128,34 +133,7 @@ class HTTPServer:
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
     
-    # def handle_get(self, file_path):
-    #     real_path = os.path.join(self.data_dir, file_path.strip('/'))
-    #     print(real_path)
-    #     if not os.path.exists(real_path):
-    #         return self.not_found_404()
-    #     elif not self.has_permission_other(real_path):
-    #         return self.forbidden_403()
-    #     else:
-    #         builder = ResponseBuilder()
-    #         builder.set_status("200", "OK")
-    #         builder.add_header("Connection", "keep-alive")
 
-    #         if os.path.isfile(real_path):
-    #             with open(real_path, 'rb') as file:
-    #                 builder.set_body(file.read())
-    #             # 可以根据文件类型设置不同的 Content-Type
-    #             # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[-1]))
-    #         elif os.path.isdir(real_path):
-    #             directory_listing = "<html><body><ul>"
-    #             for item in os.listdir(real_path):
-    #                 directory_listing += f"<li>{item}</li>"
-    #             directory_listing += "</ul></body></html>"
-    #             builder.set_body(directory_listing)
-    #             builder.add_header("Content-Type", "text/html; charset=UTF-8")
-    #         else:
-    #             builder.set_body("<html><body><h1>Unable to handle the request</h1></body></html>")
-    #             builder.add_header("Content-Type", "text/html; charset=UTF-8")
-    #         return builder.build()
     def get_query_param(self, url, param_name):
         # Example usage:
         # url = '/11912113/?SUSTech-HTTP=1'
@@ -173,21 +151,45 @@ class HTTPServer:
                 if key == param_name:
                     return value
         return None
+    
     def handle_get(self, file_path):
-        # Extract the query parameter SUSTech-HTTP if it exists
+        chunked_transfer = self.get_query_param(file_path, "chunked") == "1"
         sustech_http_value = self.get_query_param(file_path, "SUSTech-HTTP")
+
         file_path = file_path.split('?')[0]  # Remove the query string from the file path
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
+
         if not os.path.exists(real_path):
             return self.not_found_404()
-        if os.path.isdir(real_path) and sustech_http_value in (None, '0'):
+        elif os.path.isdir(real_path) and sustech_http_value in (None, '0'):
             return self.directory_listing(real_path)
         elif os.path.isdir(real_path) and sustech_http_value == '1':
             return self.directory_metadata(real_path)
+        elif os.path.isfile(real_path) and chunked_transfer:
+            return self.chunked_file_content(real_path)
         elif os.path.isfile(real_path):
             return self.file_content(real_path)
         else:
             return self.bad_request_400()
+    def chunked_file_content(self, file_path):
+        mime_type, _ = mimetypes.guess_type(file_path)
+        headers = {
+            "Transfer-Encoding": "chunked",
+            "Content-Type": mime_type,
+            "Connection": "Keep-Alive"
+        }
+        response_line = "HTTP/1.1 200 OK\r\n"
+        header_lines = "\r\n".join("{0}: {1}".format(k, v) for k, v in headers.items())
+
+        response = "{0}{1}\r\n\r\n".format(response_line, header_lines).encode('utf-8')
+        with open(file_path, 'rb') as file:
+            while True:
+                chunk = file.read(4096)  # Read file in chunks of 4KB
+                if not chunk:
+                    break
+                response += f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n"
+        response += b"0\r\n\r\n"  # End of chunked transfer
+        return response
     def directory_listing(self, directory_path):
         items = os.listdir(directory_path)
         links = ['<a href="/{0}">{0}</a>'.format(item) for item in items]
@@ -309,6 +311,90 @@ class HTTPServer:
             # 500 Internal Server Error
     
 
+    def handle_get_range(self, file_path, range_header):
+        real_path = os.path.join(self.data_dir, file_path.strip('/'))
+        if not os.path.exists(real_path) or os.path.isdir(real_path):
+            return self.not_found_404()
+
+        file_size = os.path.getsize(real_path)
+        ranges = self.parse_ranges(range_header, file_size)
+
+        if not ranges:
+            return self.range_not_satisfiable_416(file_size)
+
+        if len(ranges) == 1:
+            return self.single_range_response(real_path, ranges[0], file_size)
+        else:
+            return self.multiple_ranges_response(real_path, ranges, file_size)
+    def parse_ranges(self, range_header, file_size):
+        ranges = []
+        range_pattern = re.compile(r"bytes=(\d*)-(\d*)")
+
+        for part in range_header.split(","):
+            match = range_pattern.match(part)
+            if match:
+                start, end = match.groups()
+                start = int(start) if start else 0
+                end = int(end) if end else file_size - 1
+
+                if start > end or end >= file_size:
+                    return None  # Invalid range
+                ranges.append((start, end))
+        
+        return ranges
+    def single_range_response(self, file_path, range_tuple, file_size):
+        start, end = range_tuple
+        length = end - start + 1
+        mime_type, _ = mimetypes.guess_type(file_path)
+        headers = {
+            "Content-Type": mime_type,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(length),
+            "Connection": "Keep-Alive"
+        }
+        response_line = "HTTP/1.1 206 Partial Content\r\n"
+        header_lines = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
+        
+        with open(file_path, 'rb') as file:
+            file.seek(start)
+            body = file.read(length)
+        
+        response = f"{response_line}{header_lines}\r\n\r\n".encode() + body
+        return response
+    def multiple_ranges_response(self, file_path, ranges, file_size):
+        boundary = "3d6b6a416f9b5"
+        mime_type, _ = mimetypes.guess_type(file_path)
+        headers = {
+            "Content-Type": f"multipart/byteranges; boundary={boundary}",
+            "Connection": "Keep-Alive"
+        }
+        response_line = "HTTP/1.1 206 Partial Content\r\n"
+        header_lines = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
+
+        body = b""
+        for start, end in ranges:
+            length = end - start + 1
+            body += f"--{boundary}\r\n".encode()
+            body += f"Content-Type: {mime_type}\r\n".encode()
+            body += f"Content-Range: bytes {start}-{end}/{file_size}\r\n\r\n".encode()
+            
+            with open(file_path, 'rb') as file:
+                file.seek(start)
+                body += file.read(length) + b"\r\n"
+
+        body += f"--{boundary}--\r\n".encode()
+
+        response = f"{response_line}{header_lines}\r\n\r\n".encode() + body
+        return response
+    def range_not_satisfiable_416(self, file_size):
+        response_line = "HTTP/1.1 416 Range Not Satisfiable\r\n"
+        headers = {
+            "Content-Range": f"bytes */{file_size}",
+            "Connection": "close"
+        }
+        header_lines = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
+        response = f"{response_line}{header_lines}\r\n\r\n"
+        return response.encode()
         
     def check_session(self, session):
         try:
