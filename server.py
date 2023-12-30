@@ -85,7 +85,7 @@ class HTTPServer:
                             response = self.handle_head(path)
                         elif method == 'POST':
                             request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
-                            response = self.handle_post(client_sock,path, request_body,session)
+                            response = self.handle_post(path, request_body, session)
                         else:
                             response=self.method_not_allowed_405({"GET","HEAD","POST"})
                             keep_alive=False
@@ -102,6 +102,7 @@ class HTTPServer:
                 keep_alive=False
             finally:
                 print("response:")
+                # todo:演示时屏蔽此行
                 print(response.decode("utf-8"))
                 client_sock.sendall(response)
                 if (not keep_alive):
@@ -215,100 +216,129 @@ class HTTPServer:
         header_lines = "\r\n".join("{0}: {1}".format(k, v) for k, v in headers.items())
         return "{0}{1}\r\n\r\n{2}".format(response_line, header_lines, body).encode('utf-8')
 
-
-    def handle_post(self, client_sock,file_path, request_body,session):
-        try:
-
-            if (not os.path.exists(file_path)):
-                return self.not_found_404()
-                # 404 Not Found
-            elif(not self.has_permission_other(file_path)):
-                return self.forbidden_403()
-                # 403 Forbidden
-            else:
-                post_type = file_path.split("?")[0]
-                post_path = file_path.split("?")[1]
-                if post_type == "/upload":
-                    return self.handle_upload(client_sock, post_path, request_body,session)
-                elif post_type == "/delete":
-                    return self.handle_delete(client_sock, post_path, request_body,session)
-                else:
-                    return self.bad_request_400()
-                    # 400 Bad Request
-        except Exception as e:
-            print(f"Exception in handle_post: {e}")
-            return self.server_error_500()
-    def handle_upload(self, client_sock, file_path, request_body,session): 
-        # 构建用户专用目录
-        temp = file_path.split("=")[1]
-        user_dir = os.path.join("data/", temp)
-        user_name = file_path.split("")[1]
-
-        session_name = self.sessions[session][0]
-        if session_name != user_name:
-            return self.forbidden_403()
-            # 403 Forbidden
-        if not os.path.exists(user_dir):
-            return self.not_found_404()
-            # 404 Not Found
-        
-        # 接受文件并获取文件名
-        # 以行为单位分割request_body
-        file_body = request_body.split("\r\n\r\n")
-        part1 = file_body[1]
-        part2 = file_body[2]
-        # 以boundary为分割符分割part1
-        name_line = part1.split("\r\n")[1]
-        file_content = part2.split("\r\n")[0]
-        # 获取文件名
-        file_name_index = name_line.find("filename=")
-        file_name_start = file_name_index+10
-        file_name_end = name_line.find('"', file_name_start)
-        file_name = name_line[file_name_start:file_name_end]
-        if file_name_index == -1:
-            return self.bad_request_400()
-            # 400 Bad Request
+    def handle_post(self, path, request_body, session):
+        if '/upload' in path:
+            return self.handle_upload(path, request_body, session)
+        elif '/delete' in path:
+            return self.handle_delete(path, session)
         else:
-            file_name_start = file_name_index+10
-            file_name_end = name_line.find('"', file_name_start)
-            file_name = name_line[file_name_start:file_name_end]
+            return self.bad_request_400()
+        
+    def handle_upload(self, path, request_body, session):
+        username = self.sessions[session][0]
 
+        target_path = self.get_query_param(path, 'path')
 
-        final_path = os.path.join(user_dir, file_name)
-        with open(final_path, 'wb') as file:
-            file.write(file_content.encode("utf-8"))
-        # 200 OK
-        builder = ResponseBuilder()
-        builder.set_status("200", "OK")
-        builder.add_header("Connection", "close")
-        builder.add_header("Content-Type", "text/html; charset=UTF-8")
-        builder.set_body(file_path)
-        return builder.build()
-    def handle_delete(self, client_sock, file_path, request_body,session):
-        # 构建用户专用目录
-        temp = file_path.split("=")[1]
-        user_dir = os.path.join("data/", temp)
-        user_name = file_path.split("")[1]
-        session_name = self.sessions[session][0]
-        if session_name != user_name:
+        if not target_path or not target_path.startswith(f"/{username}/"):
             return self.forbidden_403()
-            # 403 Forbidden
-        if not os.path.exists(user_dir):
+
+        real_path = os.path.join(self.data_dir, target_path.strip('/'))
+        if not os.path.exists(os.path.dirname(real_path)):
             return self.not_found_404()
-            # 404 Not Found
-        try:
-            os.remove(user_dir)
-            # 200 OK
-            builder = ResponseBuilder()
-            builder.set_status("200", "OK")
-            builder.add_header("Connection", "close")
-            builder.add_header("Content-Type", "text/html; charset=UTF-8")
-            builder.set_body(file_path)
-            return builder.build()
-        except Exception as e:
-            print(f"Exception in handle_delete: {e}")
-            return self.server_error_500()
-            # 500 Internal Server Error
+
+        with open(real_path, 'wb') as file:
+            file.write(request_body.encode('utf-8'))
+
+        return self.build_response("200", "OK", "text/html; charset=UTF-8", "File uploaded successfully.")
+    
+    def handle_delete(self, path, session):
+        username = self.sessions[session][0]
+
+        target_path = self.get_query_param(path, 'path')
+
+        if not target_path or not target_path.startswith(f"/{username}/"):
+            return self.forbidden_403()
+
+        real_path = os.path.join(self.data_dir, target_path.strip('/'))
+        if not os.path.exists(real_path):
+            return self.not_found_404()
+
+        os.remove(real_path)
+
+        return self.build_response("200", "OK", "text/html; charset=UTF-8", "File deleted successfully.")
+
+
+
+    # def handle_post(self, path, request_body, session):
+    #     try:
+    #         if (not os.path.exists(path)):
+    #             return self.not_found_404()
+    #         elif(not self.has_permission_other(path)):
+    #             return self.forbidden_403()
+    #         else:
+    #             post_type = path.split("?")[0]
+    #             post_path = path.split("?")[1]
+    #             if post_type == "/upload":
+    #                 return self.handle_upload(post_path, request_body,session)
+    #             elif post_type == "/delete":
+    #                 return self.handle_delete(post_path, session)
+    #             else:
+    #                 return self.bad_request_400()
+    #                 # 400 Bad Request
+    #     except Exception as e:
+    #         print(f"Exception in handle_post: {e}")
+    #         return self.server_error_500()
+    # def handle_upload(self, post_path, request_body,session): 
+    #     # 构建用户专用目录
+    #     temp = post_path.split("=")[1]
+    #     user_dir = os.path.join("data/", temp)
+    #     user_name = post_path.split("/")[1]
+
+    #     session_name = self.sessions[session][0]
+    #     if session_name != user_name:
+    #         return self.forbidden_403()
+    #     if not os.path.exists(user_dir):
+    #         return self.not_found_404()
+        
+    #     # 接受文件并获取文件名
+    #     # 以行为单位分割request_body
+    #     file_body = request_body.split("\r\n\r\n")
+    #     part1 = file_body[1]
+    #     part2 = file_body[2]
+    #     # 以boundary为分割符分割part1
+    #     name_line = part1.split("\r\n")[1]
+    #     file_content = part2.split("\r\n")[0]
+    #     # 获取文件名
+    #     file_name_index = name_line.find("filename=")
+    #     file_name_start = file_name_index+10
+    #     file_name_end = name_line.find('"', file_name_start)
+    #     file_name = name_line[file_name_start:file_name_end]
+    #     if file_name_index == -1:
+    #         return self.bad_request_400()
+    #     else:
+    #         file_name_start = file_name_index+10
+    #         file_name_end = name_line.find('"', file_name_start)
+    #         file_name = name_line[file_name_start:file_name_end]
+    #     final_path = os.path.join(user_dir, file_name)
+    #     with open(final_path, 'wb') as file:
+    #         file.write(file_content.encode("utf-8"))
+    #     # 200 OK
+    #     builder = ResponseBuilder()
+    #     builder.set_status("200", "OK")
+    #     builder.add_header("Connection", "Keep-Alive")
+    #     builder.add_header("Content-Type", "text/plain; charset=UTF-8")
+    #     return builder.build()
+    # def handle_delete(self, file_path,session):
+    #     # 构建用户专用目录
+    #     temp = file_path.split("=")[1]
+    #     user_dir = os.path.join("data/", temp)
+    #     user_name = file_path.split("")[1]
+    #     session_name = self.sessions[session][0]
+    #     if session_name != user_name:
+    #         return self.forbidden_403()
+    #     if not os.path.exists(user_dir):
+    #         return self.not_found_404()
+    #     try:
+    #         os.remove(user_dir)
+    #         builder = ResponseBuilder()
+    #         builder.set_status("200", "OK")
+    #         builder.add_header("Connection", "Keep-Alive")
+    #         builder.add_header("Content-Type", "text/html; charset=UTF-8")
+    #         builder.set_body(file_path)
+    #         return builder.build()
+    #     except Exception as e:
+    #         print(f"Exception in handle_delete: {e}")
+    #         return self.server_error_500()
     
 
     def handle_get_range(self, file_path, range_header):
@@ -417,7 +447,7 @@ class HTTPServer:
             return False
         else:
             return True
-    def get_session_username(auth_header):
+    def get_session_username(self, auth_header):
         _, encoded_info = auth_header.split(' ')
         decoded_info = base64.b64decode(encoded_info).decode('utf-8')
         username, _ = decoded_info.split(':', 1)
@@ -438,8 +468,8 @@ class HTTPServer:
             # 处理各种潜在异常
             return False
     
-    def response_with_session(session_id):
-        response_headers = f'HTTP/1.1 200 OK\r\nSet-Cookie: session-id={session_id}; Path=/\r\n\r\n'
+    def response_with_session(self, session_id):
+        response_headers = f'HTTP/1.1 200 OK\r\nSet-Cookie: session-id={session_id};\r\n\r\n'
         return response_headers.encode('utf-8')
 
 
