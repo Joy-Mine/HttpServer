@@ -85,9 +85,9 @@ class HTTPServer:
                         elif method == 'HEAD':
                             response = self.handle_head(path)
                         elif method == 'POST':
-                            request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''
+                            # request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''  # 这个request_body的截取方法有错误！！
                             session_id = session.split("session-id=")[1]
-                            response = self.handle_post(path, request_body, session_id)
+                            response = self.handle_post(path, request, session_id)
                         else:
                             response=self.method_not_allowed_405({"GET","HEAD","POST"})
                             keep_alive=False
@@ -226,137 +226,80 @@ class HTTPServer:
         header_lines = "\r\n".join("{0}: {1}".format(k, v) for k, v in headers.items())
         return "{0}{1}\r\n\r\n{2}".format(response_line, header_lines, body).encode('utf-8')
 
-    def handle_post(self, path, request_body, session):
-        if '/upload' in path:
-            return self.handle_upload(path, request_body, session)
-        elif '/delete' in path:
+    def handle_post(self, path, request, session):
+        # 分割路径和查询参数
+        path_parts = path.split('?')
+        base_path = path_parts[0] if path_parts else path
+
+        # 根据基本路径决定调用哪个方法
+        if base_path == '/upload':
+            return self.handle_upload(path, request, session)
+        elif base_path == '/delete':
             return self.handle_delete(path, session)
         else:
             return self.bad_request_400()
-        
-    def handle_upload(self, path, request_body, session):
+
+    def handle_upload(self, path, request, session):
         username = self.sessions[session][0]
-
         target_path = self.get_query_param(path, 'path')
-
         if not target_path or not target_path.startswith(f"/{username}/"):
             return self.forbidden_403()
         real_path = os.path.join(self.data_dir, target_path.strip('/'))
         if not os.path.exists(os.path.dirname(real_path)):
             return self.not_found_404()
-        
-        match = re.search(r'filename="([^"]+)"', request_body)
-        # 正则表达式检查是否找到匹配项并打印结果
-        if match:
-            filename = match.group(1)
-            print(filename)
+        # 寻找分隔符
+        boundary_match = re.search(r'boundary=([^\s]+)', request)
+        if not boundary_match:
+            return self.bad_request_400()
+        boundary = boundary_match.group(1).strip()
+        # 寻找文件名
+        filename_match = re.search(r'filename="([^"]+)"', request)
+        if filename_match:
+            filename = filename_match.group(1)
         else:
-            print("Filename not found.")
-        real_path=real_path+"/"+filename
-
+            return self.bad_request_400()
+        real_path = os.path.join(real_path, filename)
+        # 提取文件内容
+        pattern = r'Content-Type: .+\r\n\r\n(.+?)\r\n--' + re.escape(boundary)
+        file_content_match = re.search(pattern, request, re.DOTALL)
+        if not file_content_match:
+            return self.bad_request_400()
+        file_data = file_content_match.group(1)
+        # 保存文件
         with open(real_path, 'wb') as file:
-            file.write(request_body.encode('utf-8'))
-
+            file.write(file_data.encode('utf-8'))
         return self.build_response("200", "OK", "text/html; charset=UTF-8", "File uploaded successfully.")
-    
-    # def handle_delete(self, path, session):
-    #     username = self.sessions[session][0]
 
-    #     target_path = self.get_query_param(path, 'path')
-
-    #     if not target_path or not target_path.startswith(f"/{username}/"):
-    #         return self.forbidden_403()
-
-    #     real_path = os.path.join(self.data_dir, target_path.strip('/'))
-    #     if not os.path.exists(real_path):
-    #         return self.not_found_404()
-
-    #     os.remove(real_path)
-
-    #     return self.build_response("200", "OK", "text/html; charset=UTF-8", "File deleted successfully.")
-
-
-
-    # def handle_post(self, path, request_body, session):
-    #     try:
-    #         if (not os.path.exists(path)):
-    #             return self.not_found_404()
-    #         elif(not self.has_permission_other(path)):
-    #             return self.forbidden_403()
-    #         else:
-    #             post_type = path.split("?")[0]
-    #             post_path = path.split("?")[1]
-    #             if post_type == "/upload":
-    #                 return self.handle_upload(post_path, request_body,session)
-    #             elif post_type == "/delete":
-    #                 return self.handle_delete(post_path, session)
-    #             else:
-    #                 return self.bad_request_400()
-    #                 # 400 Bad Request
-    #     except Exception as e:
-    #         print(f"Exception in handle_post: {e}")
-    #         return self.server_error_500()
-    # def handle_upload(self, post_path, request_body,session): 
-    #     # 构建用户专用目录
-    #     temp = post_path.split("=")[1]
-    #     user_dir = os.path.join("data/", temp)
-    #     user_name = post_path.split("/")[1]
-
-    #     session_name = self.sessions[session][0]
-    #     if session_name != user_name:
-    #         return self.forbidden_403()
-    #     if not os.path.exists(user_dir):
-    #         return self.not_found_404()
-        
-    #     # 接受文件并获取文件名
-    #     # 以行为单位分割request_body
-    #     file_body = request_body.split("\r\n\r\n")
-    #     part1 = file_body[1]
-    #     part2 = file_body[2]
-    #     # 以boundary为分割符分割part1
-    #     name_line = part1.split("\r\n")[1]
-    #     file_content = part2.split("\r\n")[0]
-    #     # 获取文件名
-    #     file_name_index = name_line.find("filename=")
-    #     file_name_start = file_name_index+10
-    #     file_name_end = name_line.find('"', file_name_start)
-    #     file_name = name_line[file_name_start:file_name_end]
-    #     if file_name_index == -1:
-    #         return self.bad_request_400()
-    #     else:
-    #         file_name_start = file_name_index+10
-    #         file_name_end = name_line.find('"', file_name_start)
-    #         file_name = name_line[file_name_start:file_name_end]
-    #     final_path = os.path.join(user_dir, file_name)
-    #     with open(final_path, 'wb') as file:
-    #         file.write(file_content.encode("utf-8"))
-    #     # 200 OK
-    #     builder = ResponseBuilder()
-    #     builder.set_status("200", "OK")
-    #     builder.add_header("Connection", "Keep-Alive")
-    #     builder.add_header("Content-Type", "text/plain; charset=UTF-8")
-    #     return builder.build()
-    def handle_delete(self, file_path,session):
-        # 构建用户专用目录
-        temp = file_path.split("=")[1]
-        user_dir = os.path.join("data/", temp)
-        user_name = file_path.split("")[1]
+    def handle_delete(self, path, session):
+        # 提取请求路径中的文件路径
+        query_param = path.split("?path=")
+        if len(query_param) < 2:
+            return self.bad_request_400()  # 无效请求，没有提供路径参数
+        file_path = query_param[1]
+        # 获取会话中的用户名
         session_name = self.sessions[session][0]
-        if session_name != user_name:
+        # 构建完整的文件路径
+        user_dir = os.path.join(self.data_dir, session_name)
+        full_path = os.path.join(self.data_dir, file_path.strip("/"))
+        # 检查用户是否有权限
+        if not full_path.startswith(user_dir):
             return self.forbidden_403()
-        if not os.path.exists(user_dir):
+        # 检查文件是否存在
+        if not os.path.exists(full_path):
             return self.not_found_404()
         try:
-            os.remove(user_dir)
+            # 删除文件
+            os.remove(full_path)
             builder = ResponseBuilder()
             builder.set_status("200", "OK")
             builder.add_header("Connection", "Keep-Alive")
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
-            builder.set_body(file_path)
+            builder.set_body("File deleted successfully.")
             return builder.build()
         except Exception as e:
             print(f"Exception in handle_delete: {e}")
             return self.server_error_500()
+
     
 
     def handle_get_range(self, file_path, range_header):
