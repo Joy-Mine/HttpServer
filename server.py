@@ -79,7 +79,7 @@ class HTTPServer:
                         method, path, protocol = request_headline
                         if method == 'GET':
                             if headers.get('Range') is not None:
-                                response=self.handle_get_range(path)
+                                response=self.handle_get_range(path, headers.get('Range'))
                             else:
                                 response = self.handle_get(path)
                         elif method == 'HEAD':
