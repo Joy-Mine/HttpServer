@@ -70,6 +70,29 @@ class HTTPServer:
                         expiration_time = time.time() + 3600.0
                         self.sessions[session_id] = (username, expiration_time)
                         response=self.response_with_session(session_id)
+                        
+                        if len(request_headline) == 3:
+                            method, path, protocol = request_headline
+                            if method == 'GET':
+                                if headers.get('Range') is not None:
+                                    response=self.handle_get_range(path, headers.get('Range'))
+                                else:
+                                    response = self.handle_get(path)
+                            elif method == 'HEAD':
+                                response = self.handle_head(path)
+                            elif method == 'POST':
+                                # request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''  # 这个request_body的截取方法有错误！！
+                                # session_id = session.split("session-id=")[1]
+                                response = self.handle_post(path, request, session_id)
+                            else:
+                                response=self.method_not_allowed_405({"GET","HEAD","POST"})
+                                keep_alive=False
+                                # 405 Method Not Allowedhandle_error(405)
+                        else:
+                            # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
+                            response=self.bad_request_400()
+                            keep_alive=False
+                        
                         return
                     if not self.check_session(session):
                         response=self.unauthorized_401()
@@ -237,7 +260,12 @@ class HTTPServer:
         elif base_path == '/delete':
             return self.handle_delete(path, session)
         else:
-            return self.bad_request_400()
+            builder = ResponseBuilder()
+            builder.set_status("200", "OK")
+            builder.add_header("Connection", "keep-alive")
+            # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[1]))
+            builder.add_header("Content-Type", "text/html; charset=UTF-8")
+            return builder.build()
 
     def handle_upload(self, path, request, session):
         username = self.sessions[session][0]
