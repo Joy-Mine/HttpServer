@@ -37,6 +37,20 @@ class HTTPServer:
             self.sock.close()
 
     
+    def get_content_type(file_path):
+        file_extension = os.path.splitext(file_path)[1].lower()
+        mime_types = {
+            '.html': 'text/html',
+            '.css': 'text/css',
+            '.js': 'application/javascript',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.txt': 'text/plain',
+            '.pdf': 'application/pdf',
+        }
+
+
     def handle_request(self, client_sock, client_address):
         while True:
             try:
@@ -58,58 +72,35 @@ class HTTPServer:
                 
                 keep_alive=True
                 authorization = headers.get('Authorization', None)
-                if not authorization or not self.check_authorization(authorization):
-                    response=self.unauthorized_401()
-                    keep_alive=False
-                    return
-                else:
-                    session = headers.get('Cookie', None)
-                    if not session:
-                        username = self.get_session_username(authorization)
-                        session_id = str(uuid.uuid4())
-                        expiration_time = time.time() + 3600.0
-                        self.sessions[session_id] = (username, expiration_time)
-                        response=self.response_with_session(session_id)
-                        
-                        if len(request_headline) == 3:
-                            method, path, protocol = request_headline
-                            if method == 'GET':
-                                if headers.get('Range') is not None:
-                                    response=self.handle_get_range(path, headers.get('Range'))
-                                else:
-                                    response = self.handle_get(path)
-                            elif method == 'HEAD':
-                                response = self.handle_head(path)
-                            elif method == 'POST':
-                                # request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''  # 这个request_body的截取方法有错误！！
-                                # session_id = session.split("session-id=")[1]
-                                response = self.handle_post(path, request, session_id)
-                            else:
-                                response=self.method_not_allowed_405({"GET","HEAD","POST"})
-                                keep_alive=False
-                                # 405 Method Not Allowedhandle_error(405)
-                        else:
-                            # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
-                            response=self.bad_request_400()
-                            keep_alive=False
-                        
-                        return
-                    if not self.check_session(session):
+                # if not authorization or not self.check_authorization(authorization):
+                #     response=self.unauthorized_401()
+                #     keep_alive=False
+                #     return
+                # else:
+                session = headers.get('Cookie', None)
+                if not session:
+                    if not authorization or not self.check_authorization(authorization):
                         response=self.unauthorized_401()
                         keep_alive=False
                         return
+                    username = self.get_session_username(authorization)
+                    session_id = str(uuid.uuid4())
+                    expiration_time = time.time() + 3600.0
+                    self.sessions[session_id] = (username, expiration_time)
+                    # response=self.response_with_session(session_id)
+                    
                     if len(request_headline) == 3:
                         method, path, protocol = request_headline
                         if method == 'GET':
                             if headers.get('Range') is not None:
-                                response=self.handle_get_range(path, headers.get('Range'))
+                                response=self.handle_get_range(path, headers.get('Range'), session_id)
                             else:
-                                response = self.handle_get(path)
+                                response = self.handle_get(path, session_id)
                         elif method == 'HEAD':
-                            response = self.handle_head(path)
+                            response = self.handle_head(path, session_id)
                         elif method == 'POST':
                             # request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''  # 这个request_body的截取方法有错误！！
-                            session_id = session.split("session-id=")[1]
+                            # session_id = session.split("session-id=")[1]
                             response = self.handle_post(path, request, session_id)
                         else:
                             response=self.method_not_allowed_405({"GET","HEAD","POST"})
@@ -119,6 +110,33 @@ class HTTPServer:
                         # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
                         response=self.bad_request_400()
                         keep_alive=False
+                    
+                    return
+                if not self.check_session(session):
+                    response=self.unauthorized_401()
+                    keep_alive=False
+                    return
+                if len(request_headline) == 3:
+                    method, path, protocol = request_headline
+                    session_id = session.split("session-id=")[1]
+                    if method == 'GET':
+                        if headers.get('Range') is not None:
+                            response=self.handle_get_range(path, headers.get('Range'), session_id)
+                        else:
+                            response = self.handle_get(path, session_id)
+                    elif method == 'HEAD':
+                        response = self.handle_head(path, session_id)
+                    elif method == 'POST':
+                        # request_body = request.split('\r\n\r\n')[1] if '\r\n\r\n' in request else ''  # 这个request_body的截取方法有错误！！
+                        response = self.handle_post(path, request, session_id)
+                    else:
+                        response=self.method_not_allowed_405({"GET","HEAD","POST"})
+                        keep_alive=False
+                        # 405 Method Not Allowedhandle_error(405)
+                else:
+                    # response="HTTP/1.1 400 Bad Request\r\n\r\n".encode("utf-8")
+                    response=self.bad_request_400()
+                    keep_alive=False
                 
             except Exception as e:
                 print(f"Exception in handling request: {e}")
@@ -142,12 +160,7 @@ class HTTPServer:
         # real_path = os.path.join(self.data_dir, file_path.strip('/'))
         file_stat = os.stat(file_path)
         return file_stat.st_mode & 0o004
-    def get_file_mime_type(self, file_extension):
-        # 不保证正确
-        # Implement the logic to get the mime type of the file.
-        # Return the mime type.
-        return mimetypes.types_map[file_extension]
-    def handle_head(self, file_path):
+    def handle_head(self, file_path, session_id):
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
         print(real_path)
         if (not os.path.exists(real_path)):
@@ -158,6 +171,9 @@ class HTTPServer:
             builder = ResponseBuilder()
             builder.set_status("200", "OK")
             builder.add_header("Connection", "keep-alive")
+            if(session_id is not None):
+                builder.add_header("Set-Cookie","session-id="+session_id)
+            #Set-Cookie: session-id={session_id};
             # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[1]))
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
@@ -181,7 +197,7 @@ class HTTPServer:
                     return value
         return None
     
-    def handle_get(self, file_path):
+    def handle_get(self, file_path, session_id):
         chunked_transfer = self.get_query_param(file_path, "chunked") == "1"
         sustech_http_value = self.get_query_param(file_path, "SUSTech-HTTP")
 
@@ -191,21 +207,23 @@ class HTTPServer:
         if not os.path.exists(real_path):
             return self.not_found_404()
         elif os.path.isdir(real_path) and sustech_http_value in (None, '0'):
-            return self.directory_listing(real_path, file_path)
+            return self.directory_listing(real_path, file_path, session_id)
         elif os.path.isdir(real_path) and sustech_http_value == '1':
-            return self.directory_metadata(real_path)
+            return self.directory_metadata(real_path, session_id)
         elif os.path.isfile(real_path) and chunked_transfer:
-            return self.chunked_file_content(real_path)
+            return self.chunked_file_content(real_path, session_id)
         elif os.path.isfile(real_path):
-            return self.file_content(real_path)
+            return self.file_content(real_path, session_id)
         else:
             return self.bad_request_400()
-    def chunked_file_content(self, file_path):
-        mime_type, _ = mimetypes.guess_type(file_path)
+    def chunked_file_content(self, file_path, session_id):
+        mime_type, _ = self.get_content_type(file_path)
+
         headers = {
             "Transfer-Encoding": "chunked",
             "Content-Type": mime_type,
-            "Connection": "Keep-Alive"
+            "Connection": "Keep-Alive",
+            "Set-Cookie": "session-id=" + session_id
         }
         response_line = "HTTP/1.1 200 OK\r\n"
         header_lines = "\r\n".join("{0}: {1}".format(k, v) for k, v in headers.items())
@@ -219,58 +237,86 @@ class HTTPServer:
                 response += f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n"
         response += b"0\r\n\r\n"  # End of chunked transfer
         return response
-    def directory_listing(self, directory_path ,file_path):
+    # def directory_listing(self, directory_path ,file_path, session_id):
+    #     items = os.listdir(directory_path)
+    #     if file_path!='/':
+    #         file_path=file_path+'/'
+    #     links = ['<a href="http://localhost:8080{1}{0}">{0}</a>'.format(item, file_path) for item in items]
+    #     body = '<html><body><h1>Directory listing for {0}</h1><ul>{1}</ul></body></html>'.format(
+    #         directory_path, ''.join(f'<li>{link}</li>' for link in links))
+    #     return self.build_response("200", "OK", "text/html; charset=UTF-8", body, session_id)
+    def directory_listing(self, directory_path, file_path, session_id):
         items = os.listdir(directory_path)
-        if file_path!='/':
-            file_path=file_path+'/'
-        links = ['<a href="http://localhost:8080{1}{0}">{0}</a>'.format(item, file_path) for item in items]
-        body = '<html><body><h1>Directory listing for {0}</h1><ul>{1}</ul></body></html>'.format(
-            directory_path, ''.join(f'<li>{link}</li>' for link in links))
-        return self.build_response("200", "OK", "text/html; charset=UTF-8", body)
-    def directory_metadata(self, directory_path):
+        links = []
+        for item in items:
+            item_path = os.path.join(directory_path, item)
+            display_name = item + '/' if os.path.isdir(item_path) else item
+            link = '<li><a href="{0}">{1}</a></li>'.format(item, display_name)
+            links.append(link)
+        body = ('<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">'
+                '<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
+                '<title>Directory listing for {0}</title></head>'
+                '<body><h1>Directory listing for {0}</h1><hr><ul>{1}</ul><hr></body></html>').format(
+                file_path, ''.join(links))
+        return self.build_response("200", "OK", "text/html; charset=UTF-8", body, session_id)
+    # def directory_metadata(self, directory_path, session_id):
+    #     items = os.listdir(directory_path)
+    #     body = json.dumps(items)
+    #     return self.build_response("200", "OK", "application/json", body, session_id)
+    def directory_metadata(self, directory_path, session_id):
         items = os.listdir(directory_path)
-        body = json.dumps(items)
-        return self.build_response("200", "OK", "application/json", body)
-    def file_content(self, file_path):
-        mime_type, _ = mimetypes.guess_type(file_path)
+        formatted_items = []
+        for item in items:
+            full_path = os.path.join(directory_path, item)
+            if os.path.isdir(full_path):
+                formatted_items.append(item + "/")
+            elif os.path.isfile(full_path):
+                formatted_items.append(item)
+        body = json.dumps(formatted_items)
+        return self.build_response("200", "OK", "application/json", body, session_id)
+    def file_content(self, file_path, session_id):
+        mime_type, _ = self.get_content_type(file_path)
         with open(file_path, 'rb') as file:
             body = file.read()
-        # return self.build_response("200", "OK", mime_type, body)
-        response = f'HTTP/1.1 200 OK\r\nContent-Type: {mime_type}\r\nContent-Length: {len(body)}\r\n\r\n'
-        response = response.encode('utf-8') + body
+        body=body.decode('utf-8')
+        return self.build_response("200", "OK", mime_type, body, session_id)
+        # response = f'HTTP/1.1 200 OK\r\nContent-Type: {mime_type}\r\nContent-Length: {len(body)}\r\n\r\n'
+        # response = response.encode('utf-8') + body
         return response
-    def build_response(self, status_code, status_text, content_type, body):
+    def build_response(self, status_code, status_text, content_type, body, session_id):
         headers = {
             "Content-Type": content_type,
             "Content-Length": str(len(body)),
-            "Connection": "Keep-Alive"
+            "Connection": "Keep-Alive",
+            "Set-Cookie": "session-id=" + session_id
         }
         response_line = "HTTP/1.1 {0} {1}\r\n".format(status_code, status_text)
         header_lines = "\r\n".join("{0}: {1}".format(k, v) for k, v in headers.items())
         return "{0}{1}\r\n\r\n{2}".format(response_line, header_lines, body).encode('utf-8')
 
-    def handle_post(self, path, request, session):
+    def handle_post(self, path, request, session_id):
         # 分割路径和查询参数
         path_parts = path.split('?')
         base_path = path_parts[0] if path_parts else path
 
         # 根据基本路径决定调用哪个方法
         if base_path == '/upload':
-            return self.handle_upload(path, request, session)
+            return self.handle_upload(path, request, session_id)
         elif base_path == '/delete':
-            return self.handle_delete(path, session)
+            return self.handle_delete(path, session_id)
         else:
             builder = ResponseBuilder()
             builder.set_status("200", "OK")
             builder.add_header("Connection", "keep-alive")
+            builder.add_header("Set-Cookie","session-id="+session_id)
             # builder.add_header("Content-Type", self.get_file_mime_type(real_path.split(".")[1]))
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
             return builder.build()
 
-    def handle_upload(self, path, request, session):
-        username = self.sessions[session][0]
+    def handle_upload(self, path, request, session_id):
+        username = self.sessions[session_id][0]
         target_path = self.get_query_param(path, 'path')
-        if not target_path or not target_path.startswith(f"/{username}/"):
+        if not target_path or not target_path.startswith(f"{username}/"):
             return self.forbidden_403()
         real_path = os.path.join(self.data_dir, target_path.strip('/'))
         if not os.path.exists(os.path.dirname(real_path)):
@@ -296,16 +342,16 @@ class HTTPServer:
         # 保存文件
         with open(real_path, 'wb') as file:
             file.write(file_data.encode('utf-8'))
-        return self.build_response("200", "OK", "text/html; charset=UTF-8", "File uploaded successfully.")
+        return self.build_response("200", "OK", "text/html; charset=UTF-8", "File uploaded successfully.", session_id)
 
-    def handle_delete(self, path, session):
+    def handle_delete(self, path, session_id):
         # 提取请求路径中的文件路径
         query_param = path.split("?path=")
         if len(query_param) < 2:
             return self.bad_request_400()  # 无效请求，没有提供路径参数
         file_path = query_param[1]
         # 获取会话中的用户名
-        session_name = self.sessions[session][0]
+        session_name = self.sessions[session_id][0]
         # 构建完整的文件路径
         user_dir = os.path.join(self.data_dir, session_name)
         full_path = os.path.join(self.data_dir, file_path.strip("/"))
@@ -322,6 +368,7 @@ class HTTPServer:
             builder.set_status("200", "OK")
             builder.add_header("Connection", "Keep-Alive")
             builder.add_header("Content-Type", "text/html; charset=UTF-8")
+            builder.add_header("Set-Cookie","session-id="+session_id)
             builder.set_body("File deleted successfully.")
             return builder.build()
         except Exception as e:
@@ -330,7 +377,7 @@ class HTTPServer:
 
     
 
-    def handle_get_range(self, file_path, range_header):
+    def handle_get_range(self, file_path, range_header, session_id):
         real_path = os.path.join(self.data_dir, file_path.strip('/'))
         if not os.path.exists(real_path) or os.path.isdir(real_path):
             return self.not_found_404()
@@ -342,34 +389,38 @@ class HTTPServer:
             return self.range_not_satisfiable_416(file_size)
 
         if len(ranges) == 1:
-            return self.single_range_response(real_path, ranges[0], file_size)
+            return self.single_range_response(real_path, ranges[0], file_size, session_id)
         else:
-            return self.multiple_ranges_response(real_path, ranges, file_size)
+            return self.multiple_ranges_response(real_path, ranges, file_size, session_id)
     def parse_ranges(self, range_header, file_size):
         ranges = []
-        range_pattern = re.compile(r"bytes=(\d*)-(\d*)")
-
-        for part in range_header.split(","):
-            match = range_pattern.match(part)
-            if match:
-                start, end = match.groups()
-                start = int(start) if start else 0
-                end = int(end) if end else file_size - 1
-
-                if start > end or end >= file_size:
-                    return None  # Invalid range
-                ranges.append((start, end))
-        
-        return ranges
-    def single_range_response(self, file_path, range_tuple, file_size):
+        # 移除可能存在的 "bytes=" 前缀
+        if 'bytes=' in range_header:
+            range_header = range_header.split('bytes=')[1]
+        range_strings = range_header.split(",")
+        for range_string in range_strings:
+            try:
+                start_end = range_string.split("-")
+                if len(start_end) != 2:
+                    continue
+                start = int(start_end[0]) if start_end[0] else 0
+                end = int(start_end[1]) if start_end[1] else file_size - 1
+                # 检查范围的有效性
+                if 0 <= start <= end < file_size:
+                    ranges.append((start, end))
+            except ValueError:
+                continue
+        return ranges if ranges else None
+    def single_range_response(self, file_path, range_tuple, file_size, session_id):
         start, end = range_tuple
         length = end - start + 1
-        mime_type, _ = mimetypes.guess_type(file_path)
+        mime_type, _ = self.get_content_type(file_path)
         headers = {
             "Content-Type": mime_type,
             "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Content-Length": str(length),
-            "Connection": "Keep-Alive"
+            "Connection": "Keep-Alive",
+            "Set-Cookie": "session-id=" + session_id
         }
         response_line = "HTTP/1.1 206 Partial Content\r\n"
         header_lines = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
@@ -380,12 +431,13 @@ class HTTPServer:
         
         response = f"{response_line}{header_lines}\r\n\r\n".encode() + body
         return response
-    def multiple_ranges_response(self, file_path, ranges, file_size):
-        boundary = "3d6b6a416f9b5"
-        mime_type, _ = mimetypes.guess_type(file_path)
+    def multiple_ranges_response(self, file_path, ranges, file_size, session_id):
+        boundary = "THISISMYSELFDIFINEDBOUNDARY"
+        mime_type, _ = self.get_content_type(file_path)
         headers = {
             "Content-Type": f"multipart/byteranges; boundary={boundary}",
-            "Connection": "Keep-Alive"
+            "Connection": "Keep-Alive",
+            "Set-Cookie": "session-id=" + session_id
         }
         response_line = "HTTP/1.1 206 Partial Content\r\n"
         header_lines = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
@@ -396,6 +448,7 @@ class HTTPServer:
             body += f"--{boundary}\r\n".encode()
             body += f"Content-Type: {mime_type}\r\n".encode()
             body += f"Content-Range: bytes {start}-{end}/{file_size}\r\n\r\n".encode()
+            # todo：不确定有没有这个“bytes”
             
             with open(file_path, 'rb') as file:
                 file.seek(start)
